@@ -569,8 +569,8 @@ fn main() {
         println!("{:}: {:}", key, val.pp());
     }
 
+    // TODO: Lift the Pi's through references and out of records and unions
     // TODO: Write it out to disk
-    // TODO: Relativize paths for Dhall
 
     // println!("{:#?}", schema);
 }
