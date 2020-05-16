@@ -155,7 +155,6 @@ enum Type0 {
     StringMap(Box<Type0>),
     // Relative path, name, arity
     Reference(PathBuf, String, usize),
-    Pi(VarRef, Box<Type0>),
 }
 
 fn str_cap(s: &str) -> String {
@@ -189,7 +188,6 @@ impl Type0 {
                     format!("{}/{}", prefix, rest)
                 }
             }
-            Type0::Pi(var, box t_) => format!("Pi_{}_{}", var.pp(), t_.to_variant_name(ctx)),
             Type0::Var(var) => var.pp(),
         }
     }
@@ -219,7 +217,6 @@ impl Type0 {
                 );*/
                 r
             }
-            Type0::Pi(var, box t_) => format!("\\({} : Type) -> {}", var.pp(), t_.pp()),
             Type0::Var(var) => var.pp(),
         }
     }
@@ -232,19 +229,16 @@ enum Type {
     // this will enforce we always can name any subrecords/unions
     Union(BTreeMap<String, Option<Type0>>),
     Record(BTreeMap<String, Type0>),
+    // Pi can recurse directly
+    // Also, this is sort of a lie, since it's really a value lambda
+    Pi(VarRef, Box<Type>),
 }
 impl Type {
     fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
         match self {
             Type::Basic(t0) => t0.clone(),
-            u @ Type::Union(_) => {
-                ctx.insert(&name, u.clone());
-                //ctx_.push("union");
-                Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0)
-            }
-            r @ Type::Record(_) => {
-                ctx.insert(&name, r.clone());
-                //ctx_.push("properties");
+            complex => {
+                ctx.insert(&name, complex.clone());
                 Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0)
             }
         }
@@ -289,6 +283,7 @@ impl Type {
                 chunks.push("\n}".to_string());
                 chunks.join(" ")
             }
+            Type::Pi(var, box t_) => format!("\\({} : Type) -> {}", var.pp(), t_.pp()),
         }
     }
 }
@@ -475,7 +470,12 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                         }
                         None => {
                             let v = ctx.new_var();
-                            Type0::Pi(v.clone(), box Type0::StringMap(box Type0::Var(v)))
+                            let name = ctx.file();
+                            Type::Pi(
+                                v.clone(),
+                                box Type::Basic(Type0::StringMap(box Type0::Var(v))),
+                            )
+                            .indirection(ctx.fresh(&name), ctx)
                         }
                     },
                 },
