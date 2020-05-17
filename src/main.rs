@@ -64,8 +64,6 @@ fn relativize(within: &Path, to: &Path) -> PathBuf {
 
     let withins: Vec<String> = path_to_components(&within);
 
-    let tos: Vec<String> = path_to_components(&to);
-
     let (_, withins_dir) = withins.split_last().unwrap();
     if p2s_right.len() == 0 {
         PathBuf::from("./.")
@@ -523,14 +521,12 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
         Some(r) => {
             // HACK: commonOptions needs to be stripped from schema for schemars
             // library to properly parse BuildKite's json schema.
-            let r_ = Type0::Reference(
+            Type0::Reference(
                 ctx.path.clone(),
                 format!("{}/Type", r.replace("/commonOptions", "")),
                 0,
                 Vec::new(),
-            );
-            println!("Trying to set {:} to {:?}", r, r_);
-            r_
+            )
         }
         None => match s.instance_type {
             Some(sv) => match sv {
