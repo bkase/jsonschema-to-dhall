@@ -472,7 +472,8 @@ fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
         let name = ctx.file();
         let innerTyp = schemaToType(ctx, obj).indirection(name, ctx);
         ctx.pop();
-        map.insert(key.clone(), Rc::new(innerTyp));
+        // Assume the schema doesn't know what is optional and required (unfortunately)
+        map.insert(key.clone(), Rc::new(Type0::Optional(Rc::new(innerTyp))));
     }
     ctx.pop();
     Type::Record(map)
