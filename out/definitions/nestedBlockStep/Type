@@ -1,2 +1,2 @@
-{ block : (./properties/block/Type ) 
+{ block : Optional (./properties/block/Type ) 
 }

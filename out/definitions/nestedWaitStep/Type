@@ -1,3 +1,3 @@
-{ wait : (./properties/wait/Type ) 
-, waiter : (./properties/waiter/Type ) 
+{ wait : Optional (./properties/wait/Type ) 
+, waiter : Optional (./properties/waiter/Type ) 
 }

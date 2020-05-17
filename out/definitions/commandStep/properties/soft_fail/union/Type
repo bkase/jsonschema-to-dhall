@@ -1,2 +1,2 @@
-{ exit_status : (./properties/exit_status/Type ) 
+{ exit_status : Optional (./properties/exit_status/Type ) 
 }

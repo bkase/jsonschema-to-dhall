@@ -1,4 +1,4 @@
-{ allowed : (./properties/allowed/Type ) 
-, permit_on_passed : (./properties/permit_on_passed/Type ) 
-, reason : (./properties/reason/Type ) 
+{ allowed : Optional (./properties/allowed/Type ) 
+, permit_on_passed : Optional (./properties/permit_on_passed/Type ) 
+, reason : Optional (./properties/reason/Type ) 
 }
