@@ -1,0 +1,5 @@
+{ hint : (./properties/hint/Type ) 
+, label : (./properties/label/Type ) 
+, required : (./properties/required/Type ) 
+, value : (./properties/value/Type ) 
+}

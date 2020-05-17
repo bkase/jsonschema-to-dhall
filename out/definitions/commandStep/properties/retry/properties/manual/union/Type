@@ -1,0 +1,4 @@
+{ allowed : (./properties/allowed/Type ) 
+, permit_on_passed : (./properties/permit_on_passed/Type ) 
+, reason : (./properties/reason/Type ) 
+}

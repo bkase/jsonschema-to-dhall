@@ -1,0 +1,3 @@
+{ exit_status : (./properties/exit_status/Type ) 
+, limit : (./properties/limit/Type ) 
+}

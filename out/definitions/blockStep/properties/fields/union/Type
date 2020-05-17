@@ -1,0 +1,8 @@
+{ default : (./properties/default/Type0 ) 
+, hint : (./properties/hint/Type0 ) 
+, key : (./properties/key/Type0 ) 
+, multiple : (./properties/multiple/Type ) 
+, options : (./properties/options/Type0 ) 
+, required : (./properties/required/Type0 ) 
+, select : (./properties/select/Type ) 
+}

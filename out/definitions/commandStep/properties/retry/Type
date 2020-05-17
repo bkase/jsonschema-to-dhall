@@ -1,0 +1,3 @@
+{ automatic : (./properties/automatic/Type ) 
+, manual : (./properties/manual/Type ) 
+}
