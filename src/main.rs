@@ -8,11 +8,12 @@ use schemars::schema::{
     InstanceType, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::iter::{self, Zip};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 fn strvec_to_path(components: Vec<String>) -> PathBuf {
     components
@@ -128,8 +129,8 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone)]
-struct VarRef(usize);
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+pub struct VarRef(usize);
 impl VarRef {
     fn pp(&self) -> String {
         format!("var{:}", self.0)
@@ -144,17 +145,18 @@ impl VarRef {
 // TODO: If further symbolic manipulation is necessary consider
 // using the {ann, expr} <-> expr mutual recursion trick to add
 // an arbitrary annotation to every node.
-#[derive(Debug, Clone)]
-enum Type0 {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type0 {
     Var(VarRef),
     Bool,
     Text,
     Natural,
-    List(Box<Type0>),
-    Optional(Box<Type0>),
-    StringMap(Box<Type0>),
-    // Relative path, name, arity
-    Reference(PathBuf, String, usize),
+    List(Rc<Type0>),
+    Optional(Rc<Type0>),
+    StringMap(Rc<Type0>),
+    // Relative path, name, unapplied bindings, applied vars
+    // invariant: Applied vars monotonically increases
+    Reference(PathBuf, String, usize, Vec<VarRef>),
 }
 
 fn str_cap(s: &str) -> String {
@@ -162,15 +164,20 @@ fn str_cap(s: &str) -> String {
 }
 
 impl Type0 {
+    fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
+        ctx.insert(&name, Rc::new(Type::Basic(Rc::new(self.clone()))));
+        Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0, Vec::new())
+    }
+
     fn to_variant_name(&self, ctx: &mut Context) -> String {
         match self {
             Type0::Bool => "Boolean".to_string(),
             Type0::Text => "String".to_string(),
             Type0::Natural => "Number".to_string(),
-            Type0::List(box t_) => format!("List{}", t_.to_variant_name(ctx)),
-            Type0::Optional(box t_) => format!("Optional{}", t_.to_variant_name(ctx)),
-            Type0::StringMap(box t_) => format!("StringMap{}", t_.to_variant_name(ctx)),
-            Type0::Reference(_, s, _) => {
+            Type0::List(t_) => format!("List{}", t_.to_variant_name(ctx)),
+            Type0::Optional(t_) => format!("Optional{}", t_.to_variant_name(ctx)),
+            Type0::StringMap(t_) => format!("StringMap{}", t_.to_variant_name(ctx)),
+            Type0::Reference(_, s, _, _) => {
                 let p = PathBuf::from(s);
                 let mut p_ = p.clone();
                 // pop to remove detritus
@@ -197,10 +204,10 @@ impl Type0 {
             Type0::Bool => "Bool".to_string(),
             Type0::Text => "Text".to_string(),
             Type0::Natural => "Natural".to_string(),
-            Type0::List(box t_) => format!("List {}", t_.pp()),
-            Type0::Optional(box t_) => format!("Optional {}", t_.pp()),
-            Type0::StringMap(box t_) => format!("List {{ mapKey: Text, mapValue: {} }}", t_.pp()),
-            Type0::Reference(path, s, _) => {
+            Type0::List(t_) => format!("List {}", t_.pp()),
+            Type0::Optional(t_) => format!("Optional {}", t_.pp()),
+            Type0::StringMap(t_) => format!("List {{ mapKey: Text, mapValue: {} }}", t_.pp()),
+            Type0::Reference(path, s, _, vars) => {
                 let path = PathBuf::from(&format!(
                     "{}/Type",
                     path.to_str().unwrap().to_string().replace("#/", "")
@@ -215,33 +222,43 @@ impl Type0 {
                     s.replace("#/", ""),
                     r
                 );*/
-                r
+                format!(
+                    "{} {}",
+                    r,
+                    &vars[..]
+                        .iter()
+                        .map(|v| v.pp())
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                )
             }
             Type0::Var(var) => var.pp(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-enum Type {
-    Basic(Type0),
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Basic(Rc<Type0>),
     // union and record can't recurse directly, they must use references
     // this will enforce we always can name any subrecords/unions
-    Union(BTreeMap<String, Option<Type0>>),
-    Record(BTreeMap<String, Type0>),
+    Union(BTreeMap<String, Option<Rc<Type0>>>),
+    Record(BTreeMap<String, Rc<Type0>>),
     // Pi can recurse directly
     // Also, this is sort of a lie, since it's really a value lambda
-    Pi(VarRef, Box<Type>),
+    Pi(BTreeSet<VarRef>, Rc<Type>),
 }
 impl Type {
-    fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
+    fn arity(&self) -> usize {
         match self {
-            Type::Basic(t0) => t0.clone(),
-            complex => {
-                ctx.insert(&name, complex.clone());
-                Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0)
-            }
+            Type::Pi(vs, rest) => vs.len() + rest.arity(),
+            _ => 0,
         }
+    }
+
+    fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
+        ctx.insert(&name, Rc::new(self.clone()));
+        Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0, Vec::new())
     }
 
     fn pp(&self) -> String {
@@ -283,7 +300,14 @@ impl Type {
                 chunks.push("\n}".to_string());
                 chunks.join(" ")
             }
-            Type::Pi(var, box t_) => format!("\\({} : Type) -> {}", var.pp(), t_.pp()),
+            Type::Pi(vars, t_) => {
+                let prefix = vars
+                    .iter()
+                    .map(|v| format!("\\({} : Type) ->", v.pp()))
+                    .collect::<Vec<String>>()
+                    .join(" ");
+                format!("{} {}", prefix, t_.pp())
+            }
         }
     }
 }
@@ -293,12 +317,12 @@ fn path_to_file(p: &PathBuf) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct Context {
+pub struct Context {
     fresh_: BTreeMap<String, u32>,
     vars: usize,
     path: PathBuf,
     top_level_path: PathBuf,
-    data: BTreeMap<String, Type>,
+    data: BTreeMap<String, Rc<Type>>,
 }
 impl Context {
     fn new() -> Context {
@@ -334,7 +358,7 @@ impl Context {
         path_.to_str().unwrap().to_string()
     }
 
-    fn insert(&mut self, k: &str, v: Type) {
+    fn insert(&mut self, k: &str, v: Rc<Type>) {
         let name = self.named(k);
         self.data.insert(name, v);
     }
@@ -363,14 +387,14 @@ fn unionOrRegular(ctx: &mut Context, ss: &[Schema]) -> Type {
     match ss {
         [Schema::Object(s)] => schemaToTypeTopLevel(ctx, s),
         xs => {
-            let mut map: BTreeMap<String, Option<Type0>> = BTreeMap::new();
+            let mut map: BTreeMap<String, Option<Rc<Type0>>> = BTreeMap::new();
             for x in xs.iter() {
                 match x {
                     Schema::Object(s) => {
                         ctx.push("union");
                         let typ = schemaToType(ctx, s);
                         ctx.pop();
-                        let _ = map.insert(typ.to_variant_name(ctx), Some(typ));
+                        let _ = map.insert(typ.to_variant_name(ctx), Some(Rc::new(typ)));
                     }
                     _ => panic!("Unimplemented"),
                 }
@@ -384,14 +408,15 @@ fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
     // Unsupported
     assert!(o.required.len() == 0);
 
-    let mut map: BTreeMap<String, Type0> = BTreeMap::new();
+    let mut map: BTreeMap<String, Rc<Type0>> = BTreeMap::new();
     ctx.push("properties");
     for (key, val) in o.properties.iter() {
         let obj = schemaAsObj(val);
         ctx.push(key);
-        let innerTyp = schemaToType(ctx, obj);
+        let name = ctx.file();
+        let innerTyp = schemaToType(ctx, obj).indirection(ctx.fresh(&name), ctx);
         ctx.pop();
-        map.insert(key.clone(), innerTyp);
+        map.insert(key.clone(), Rc::new(innerTyp));
     }
     ctx.pop();
     Type::Record(map)
@@ -400,15 +425,15 @@ fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
 fn schemaToTypeTopLevel(ctx: &mut Context, s: &SchemaObject) -> Type {
     let s = s.clone();
     match &s.reference {
-        Some(_) => Type::Basic(schemaToType(ctx, &s)),
+        Some(_) => Type::Basic(Rc::new(schemaToType(ctx, &s))),
         None => match &s.instance_type {
             Some(sv) => match sv {
                 SingleOrVec::Single(it) => match it {
                     box InstanceType::Object => match s.object {
                         Some(o) => objToType(ctx, &o),
-                        None => Type::Basic(schemaToType(ctx, &s)),
+                        None => Type::Basic(Rc::new(schemaToType(ctx, &s))),
                     },
-                    _ => Type::Basic(schemaToType(ctx, &s)),
+                    _ => Type::Basic(Rc::new(schemaToType(ctx, &s))),
                 },
                 SingleOrVec::Vec(_) => panic!("Unimplemented"),
             },
@@ -421,7 +446,7 @@ fn schemaToTypeTopLevel(ctx: &mut Context, s: &SchemaObject) -> Type {
                             let s = schemaAsObj(&schemas[0]);
                             if s.instance_type == Some(SingleOrVec::Single(box InstanceType::Null))
                             {
-                                Type::Basic(schemaToType(ctx, s))
+                                Type::Basic(Rc::new(schemaToType(ctx, s)))
                             } else {
                                 unionOrRegular(ctx, schemas.as_slice())
                             }
@@ -444,6 +469,7 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                 ctx.path.clone(),
                 format!("{}/Type", r.replace("/commonOptions", "")),
                 0,
+                Vec::new(),
             )
         }
         None => match s.instance_type {
@@ -461,7 +487,7 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                             SingleOrVec::Single(schema) => schemaToType(ctx, schemaAsObj(&schema)),
                             SingleOrVec::Vec(_) => panic!("Unimplemented"),
                         };
-                        Type0::List(box innerTyp)
+                        Type0::List(Rc::new(innerTyp))
                     }
                     box InstanceType::Object => match s.object {
                         Some(o) => {
@@ -472,8 +498,14 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                             let v = ctx.new_var();
                             let name = ctx.file();
                             Type::Pi(
-                                v.clone(),
-                                box Type::Basic(Type0::StringMap(box Type0::Var(v))),
+                                {
+                                    let mut s = BTreeSet::new();
+                                    s.insert(v.clone());
+                                    s
+                                },
+                                Rc::new(Type::Basic(Rc::new(Type0::StringMap(Rc::new(
+                                    Type0::Var(v),
+                                ))))),
                             )
                             .indirection(ctx.fresh(&name), ctx)
                         }
@@ -498,7 +530,7 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                                 let resolved =
                                     inner.indirection(format!("{}NonNull", ctx.file()), ctx);
 
-                                Type0::Optional(box resolved)
+                                Type0::Optional(Rc::new(resolved))
                             } else {
                                 let name = ctx.file();
                                 unionOrRegular(ctx, schemas.as_slice())
@@ -536,7 +568,7 @@ fn addDefinitionsToCtx(ctx: &mut Context, definitions: &BTreeMap<String, Schema>
         //match innerTyp {
         //    Type::Record(_) => println!("Skipping record"),
         //    t => {
-        ctx.insert(&format!("{}/Type", key), innerTyp);
+        ctx.insert(&format!("{}/Type", key), Rc::new(innerTyp));
         //    }
         //};
     }
@@ -553,8 +585,121 @@ fn rootSchema(r: &RootSchema) -> (Context, Type) {
     (ctx, rootRecord)
 }
 
-fn lambda_lift(ctx: &mut Context) {
-    // TODO
+mod lambda_lift {
+    use super::*;
+
+    fn gen_new_vars(ctx: &mut Context, count: usize) -> Vec<VarRef> {
+        iter::repeat_with(|| ctx.new_var()).take(count).collect()
+    }
+
+    fn pi_all(vars: &[VarRef], typ: Rc<Type>) -> Rc<Type> {
+        if vars.len() == 0 {
+            typ
+        } else {
+            let mut new_vars = BTreeSet::new();
+            for v in vars {
+                new_vars.insert(v.clone());
+            }
+
+            match &*typ {
+                Type::Pi(old_vars, rest) => {
+                    new_vars.append(&mut old_vars.clone());
+                    Rc::new(Type::Pi(new_vars, rest.clone()))
+                }
+                _ => Rc::new(Type::Pi(new_vars, typ.clone())),
+            }
+        }
+    }
+
+    // Reload all references and update arities
+    // Create local Pi's on the perifery to fully saturate all references
+    fn lift(ctx: &mut Context, typ: Rc<Type>, new_vars: &mut Vec<VarRef>) -> Rc<Type> {
+        fn go(ctx: &mut Context, typ: Rc<Type0>, new_vars: &mut Vec<VarRef>) -> Rc<Type0> {
+            use Type0::*;
+            match &*typ {
+                Bool | Text | Natural | Var(_) => typ,
+                List(t_) => Rc::new(List(go(ctx, t_.clone(), new_vars))),
+                Optional(t_) => Rc::new(Optional(go(ctx, t_.clone(), new_vars))),
+                StringMap(t_) => Rc::new(StringMap(go(ctx, t_.clone(), new_vars))),
+                Reference(p0, s, _, vars) => {
+                    // safe to unwrap since we've already put all refs in the context
+                    let arity = ctx.data.get(s).unwrap().arity();
+                    // gen the vars
+                    let mut vs: Vec<VarRef> = gen_new_vars(ctx, arity - vars.len());
+                    {
+                        // accumulate them for later
+                        let mut vs_ = vs.clone();
+                        new_vars.append(&mut vs_);
+                    }
+                    // apply the new vars to the reference
+                    Rc::new(Reference(p0.clone(), s.clone(), arity, {
+                        let mut vs_ = vars.clone();
+                        vs_.append(&mut vs);
+                        vs_
+                    }))
+                }
+            }
+        }
+
+        let typ_ = match &*typ {
+            Type::Pi(v, typ2) => {
+                // recurse and fuse here
+                let typ_ = lift(ctx, typ2.clone(), new_vars);
+                match &*typ_ {
+                    Type::Pi(v2, typ3) => {
+                        let mut s = v.clone();
+                        let mut v2 = v2.clone();
+                        s.append(&mut v2);
+                        Rc::new(Type::Pi(s, typ3.clone()))
+                    }
+                    _ => Rc::new(Type::Pi(v.clone(), typ_.clone())),
+                }
+            }
+            Type::Basic(typ0) => Rc::new(Type::Basic(go(ctx, typ0.clone(), new_vars))),
+            Type::Record(map) => {
+                let mut map_ = BTreeMap::new();
+                for (key, val) in map.iter() {
+                    map_.insert(key.clone(), go(ctx, val.clone(), new_vars));
+                }
+                Rc::new(Type::Record(map_))
+            }
+            Type::Union(map) => {
+                let mut map_: BTreeMap<String, Option<Rc<Type0>>> = BTreeMap::new();
+                for (key, val) in map.iter() {
+                    map_.insert(key.clone(), val.clone().map(|v| go(ctx, v, new_vars)));
+                }
+                Rc::new(Type::Union(map_))
+            }
+        };
+
+        pi_all(new_vars, typ_)
+    }
+
+    // Iterate lifting breadth-first across context until a fixed point
+    pub fn run(ctx: &mut Context) {
+        // TODO: If this is too slow, materialize a "stable" bool instead of doing deep equality
+        // each time.
+        let mut all_stable = false;
+        let mut i = 0;
+        println!("start iter");
+        while !all_stable {
+            i += 1;
+            println!("next iter");
+            let mut data_ = ctx.data.clone();
+            data_ = data_
+                .iter()
+                .map(|(k, v)| {
+                    let mut vec = Vec::new();
+                    (k.clone(), lift(ctx, v.clone(), &mut vec))
+                })
+                .collect::<BTreeMap<String, Rc<Type>>>();
+            all_stable = ctx.data == data_;
+            ctx.data = data_;
+            /*if i > 3 {
+                break;
+            }*/
+        }
+    }
 }
 
 fn main() {
@@ -563,13 +708,13 @@ fn main() {
 
     let schema: RootSchema = serde_json::from_reader(reader).expect("from_reader");
 
-    let (ctx, rootRecord) = rootSchema(&schema);
+    let (mut ctx, rootRecord) = rootSchema(&schema);
 
+    lambda_lift::run(&mut ctx);
     for (key, val) in &ctx.data {
         println!("{:}: {:}", key, val.pp());
     }
 
-    // TODO: Lift the Pi's through references and out of records and unions
     // TODO: Write it out to disk
 
     // println!("{:#?}", schema);
