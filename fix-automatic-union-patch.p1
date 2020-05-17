@@ -1,0 +1,8 @@
+diff --git a/out/definitions/commandStep/properties/retry/properties/automatic/Type b/out/definitions/commandStep/properties/retry/properties/automatic/Type
+index f13cd70..6abcfd5 100644
+--- a/out/definitions/commandStep/properties/retry/properties/automatic/Type
++++ b/out/definitions/commandStep/properties/retry/properties/automatic/Type
+@@ -1 +1 @@
+-< AutomaticRetry/Type : (../../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../../automaticRetry/Type ) >
+\ No newline at end of file
++< AutomaticRetry/Type : (../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../automaticRetry/Type ) >
