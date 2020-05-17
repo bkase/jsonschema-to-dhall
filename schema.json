@@ -832,7 +832,7 @@
           "$ref": "#/definitions/groupStep/properties/group"
         },
         "name": {
-          "$ref": "#/definitions/groupStep/properties/label"
+          "$ref": "#/definitions/groupStep/properties/group"
         },
         "steps": {
           "type": "array",

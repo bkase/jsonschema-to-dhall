@@ -9,7 +9,8 @@ use schemars::schema::{
 };
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
+use std::fs::{self, File};
+use std::io::prelude::*;
 use std::io::BufReader;
 use std::iter::{self, Zip};
 use std::path::{Path, PathBuf};
@@ -65,10 +66,10 @@ fn relativize(within: &Path, to: &Path) -> PathBuf {
 
     let tos: Vec<String> = path_to_components(&to);
 
-    //println!("p2s_left {:?}, p2s_right {:?}", p2s_left, p2s_right);
-
     let (_, withins_dir) = withins.split_last().unwrap();
-    if p2s_left == withins_dir {
+    if p2s_right.len() == 0 {
+        PathBuf::from("./.")
+    } else if p2s_left == withins_dir {
         PathBuf::from("./").join(&p2right)
     } else {
         iter::repeat("../".to_string())
@@ -165,8 +166,23 @@ fn str_cap(s: &str) -> String {
 
 impl Type0 {
     fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
-        ctx.insert(&name, Rc::new(Type::Basic(Rc::new(self.clone()))));
-        Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0, Vec::new())
+        let has_name = ctx.has(&name);
+        let mut fallthrough = || {
+            let name = ctx.fresh(&name);
+            ctx.insert(&name, Rc::new(Type::Basic(Rc::new(self.clone()))));
+            Type0::Reference(ctx.relative_within(true), ctx.named(&name), 0, Vec::new())
+        };
+        match self {
+            Type0::Reference(_, _, _, _) => {
+                // if we already have written this in context reuse it
+                if has_name {
+                    self.clone()
+                } else {
+                    fallthrough()
+                }
+            }
+            _ => fallthrough(),
+        }
     }
 
     fn to_variant_name(&self, ctx: &mut Context) -> String {
@@ -182,8 +198,7 @@ impl Type0 {
                 let mut p_ = p.clone();
                 // pop to remove detritus
                 while path_to_file(&p_).starts_with("Type")
-                    || path_to_file(&p_) == "union"
-                    || path_to_file(&p_) == "properties"
+                    || is_grouping_component(&path_to_file(&p_))
                 {
                     p_.pop();
                 }
@@ -223,7 +238,7 @@ impl Type0 {
                     r
                 );*/
                 format!(
-                    "{} {}",
+                    "({} {})",
                     r,
                     &vars[..]
                         .iter()
@@ -257,8 +272,14 @@ impl Type {
     }
 
     fn indirection(&self, name: String, ctx: &mut Context) -> Type0 {
-        ctx.insert(&name, Rc::new(self.clone()));
-        Type0::Reference(ctx.top_level_path.clone(), ctx.named(&name), 0, Vec::new())
+        match self {
+            Type::Basic(typ) => typ.indirection(name, ctx),
+            _ => {
+                let name = ctx.fresh(&name);
+                ctx.insert(&name, Rc::new(self.clone()));
+                Type0::Reference(ctx.relative_within(true), ctx.named(&name), 0, Vec::new())
+            }
+        }
     }
 
     fn pp(&self) -> String {
@@ -316,6 +337,10 @@ fn path_to_file(p: &PathBuf) -> String {
     p.file_name().unwrap().to_str().unwrap().to_string()
 }
 
+fn is_grouping_component(s: &str) -> bool {
+    s == "union" || s == "properties"
+}
+
 #[derive(Debug, Clone)]
 pub struct Context {
     fresh_: BTreeMap<String, u32>,
@@ -349,6 +374,34 @@ impl Context {
         self.top_level_path = self.path.clone();
     }
 
+    fn relative_within(&self, keep_first_grouping: bool) -> PathBuf {
+        // take until last "grouping component"
+        // in other words, start from the back and skip until the first one
+        let components = path_to_components(&self.path);
+        let mut once = true;
+        PathBuf::from(
+            components
+                .iter()
+                .rev()
+                .skip_while(|r| {
+                    if keep_first_grouping {
+                        let old = once;
+                        once = once && !is_grouping_component(r);
+                        old
+                    } else {
+                        !is_grouping_component(r)
+                    }
+                })
+                .map(|s| s.clone())
+                .collect::<Vec<String>>()
+                .iter()
+                .rev()
+                .map(|s| s.clone())
+                .collect::<Vec<String>>()
+                .join("/"),
+        )
+    }
+
     fn pop(&mut self) -> bool {
         self.path.pop()
     }
@@ -356,6 +409,11 @@ impl Context {
     fn named(&self, k: &str) -> String {
         let path_ = self.path.join(Path::new(k));
         path_.to_str().unwrap().to_string()
+    }
+
+    fn has(&self, k: &str) -> bool {
+        let key = self.named(k);
+        self.fresh_.get(&key).is_some()
     }
 
     fn insert(&mut self, k: &str, v: Rc<Type>) {
@@ -414,7 +472,7 @@ fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
         let obj = schemaAsObj(val);
         ctx.push(key);
         let name = ctx.file();
-        let innerTyp = schemaToType(ctx, obj).indirection(ctx.fresh(&name), ctx);
+        let innerTyp = schemaToType(ctx, obj).indirection(name, ctx);
         ctx.pop();
         map.insert(key.clone(), Rc::new(innerTyp));
     }
@@ -465,12 +523,14 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
         Some(r) => {
             // HACK: commonOptions needs to be stripped from schema for schemars
             // library to properly parse BuildKite's json schema.
-            Type0::Reference(
+            let r_ = Type0::Reference(
                 ctx.path.clone(),
                 format!("{}/Type", r.replace("/commonOptions", "")),
                 0,
                 Vec::new(),
-            )
+            );
+            println!("Trying to set {:} to {:?}", r, r_);
+            r_
         }
         None => match s.instance_type {
             Some(sv) => match sv {
@@ -559,7 +619,6 @@ fn schemaAsObj(s: &Schema) -> &SchemaObject {
 fn addDefinitionsToCtx(ctx: &mut Context, definitions: &BTreeMap<String, Schema>) {
     ctx.push("definitions");
     for (key, value) in definitions.iter() {
-        println!("Got key {}", key);
         ctx.push(key);
         ctx.update_top_level_path();
         let innerTyp = schemaToTypeTopLevel(ctx, schemaAsObj(value));
@@ -681,10 +740,8 @@ mod lambda_lift {
         // each time.
         let mut all_stable = false;
         let mut i = 0;
-        println!("start iter");
         while !all_stable {
             i += 1;
-            println!("next iter");
             let mut data_ = ctx.data.clone();
             data_ = data_
                 .iter()
@@ -712,7 +769,14 @@ fn main() {
 
     lambda_lift::run(&mut ctx);
     for (key, val) in &ctx.data {
-        println!("{:}: {:}", key, val.pp());
+        let path = PathBuf::from(key.replace("#/", "out/"));
+        let path_components = path_to_components(&path);
+        let (_, dir_components) = path_components.split_last().unwrap();
+        let dirpath = PathBuf::from(dir_components.join("/"));
+        fs::create_dir_all(dirpath).unwrap();
+        let mut file = File::create(path).unwrap();
+        file.write_all(val.pp().as_bytes()).unwrap();
+        // println!("wrote {:} with {:}", key, val.pp());
     }
 
     // TODO: Write it out to disk
