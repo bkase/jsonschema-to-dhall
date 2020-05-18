@@ -16,6 +16,16 @@ use std::iter::{self, Zip};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+// Blacklist things that are broken
+fn skip_because_blacklist(name: &str) -> bool {
+    name.contains("blockStep")
+        || name.contains("nestedBlockStep")
+        || name.contains("groupStep")
+        || name.contains("nestedWaitStep")
+        || name.contains("waitStep")
+        || name.starts_with("#/properties")
+}
+
 fn strvec_to_path(components: Vec<String>) -> PathBuf {
     components
         .iter()
@@ -339,6 +349,11 @@ fn is_grouping_component(s: &str) -> bool {
     s == "union" || s == "properties"
 }
 
+pub struct Paths {
+    path: PathBuf,
+    dirpath: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct Context {
     fresh_: BTreeMap<String, u32>,
@@ -356,6 +371,14 @@ impl Context {
             top_level_path: PathBuf::new().join("/"),
             data: BTreeMap::new(),
         }
+    }
+
+    fn paths_from_key(key: &str) -> Paths {
+        let path = PathBuf::from(key.replace("#/", "out/"));
+        let path_components = path_to_components(&path);
+        let (_, dir_components) = path_components.split_last().unwrap();
+        let dirpath = PathBuf::from(dir_components.join("/"));
+        Paths { path, dirpath }
     }
 
     fn new_var(&mut self) -> VarRef {
@@ -648,7 +671,7 @@ mod lambda_lift {
         iter::repeat_with(|| ctx.new_var()).take(count).collect()
     }
 
-    fn pi_all(vars: &[VarRef], typ: Rc<Type>) -> Rc<Type> {
+    pub fn pi_all(vars: &[VarRef], typ: Rc<Type>) -> Rc<Type> {
         if vars.len() == 0 {
             typ
         } else {
@@ -669,7 +692,7 @@ mod lambda_lift {
 
     // Reload all references and update arities
     // Create local Pi's on the perifery to fully saturate all references
-    fn lift(ctx: &mut Context, typ: Rc<Type>, new_vars: &mut Vec<VarRef>) -> Rc<Type> {
+    pub fn lift(ctx: &mut Context, typ: Rc<Type>, new_vars: &mut Vec<VarRef>) -> Rc<Type> {
         fn go(ctx: &mut Context, typ: Rc<Type0>, new_vars: &mut Vec<VarRef>) -> Rc<Type0> {
             use Type0::*;
             match &*typ {
@@ -736,9 +759,7 @@ mod lambda_lift {
         // TODO: If this is too slow, materialize a "stable" bool instead of doing deep equality
         // each time.
         let mut all_stable = false;
-        let mut i = 0;
         while !all_stable {
-            i += 1;
             let mut data_ = ctx.data.clone();
             data_ = data_
                 .iter()
@@ -749,11 +770,61 @@ mod lambda_lift {
                 .collect::<BTreeMap<String, Rc<Type>>>();
             all_stable = ctx.data == data_;
             ctx.data = data_;
-            /*if i > 3 {
-                break;
-            }*/
         }
     }
+}
+
+// Simple values for the top-level definitions
+enum Expr {
+    Type(Rc<Type>),
+    Record(BTreeMap<String, Rc<Expr>>),
+}
+impl Expr {
+    fn pp(&self) -> String {
+        match self {
+            Expr::Type(typ) => typ.pp(),
+            Expr::Record(map) => {
+                let mut chunks = vec!["{".to_string()];
+                let mut first = true;
+                for (key, val) in map.iter() {
+                    if !first {
+                        chunks.push("\n,".to_string());
+                    }
+                    chunks.push(key.to_string());
+                    chunks.push("=".to_string());
+                    chunks.push(val.pp());
+                    first = false;
+                }
+                chunks.push("\n}".to_string());
+                chunks.join(" ")
+            }
+        }
+    }
+}
+
+fn generate_top_level(ctx: &mut Context) {
+    let mut map: BTreeMap<String, Rc<Expr>> = BTreeMap::new();
+    let data_ = ctx.data.clone();
+    for (key, _) in data_ {
+        if skip_because_blacklist(&key) {
+            continue;
+        }
+        let name = key.replace("#/", "");
+        let mut vec = Vec::new();
+        let typ = Rc::new(Type::Basic(Rc::new(Type0::Reference(
+            PathBuf::from("#/Type"),
+            key.clone(),
+            0,
+            Vec::new(),
+        ))));
+        let typ_ = lambda_lift::lift(ctx, typ.clone(), &mut vec);
+        map.insert(name, Rc::new(Expr::Type(lambda_lift::pi_all(&vec, typ_))));
+    }
+    let expr = Expr::Record(map);
+
+    fs::create_dir_all("out/top_level").unwrap();
+    let mut file = File::create("out/top_level/Type").unwrap();
+    file.write_all(expr.pp().as_bytes()).unwrap();
 }
 
 fn main() {
@@ -762,21 +833,18 @@ fn main() {
 
     let schema: RootSchema = serde_json::from_reader(reader).expect("from_reader");
 
-    let (mut ctx, rootRecord) = rootSchema(&schema);
+    let (mut ctx, _) = rootSchema(&schema);
 
     lambda_lift::run(&mut ctx);
     for (key, val) in &ctx.data {
-        let path = PathBuf::from(key.replace("#/", "out/"));
-        let path_components = path_to_components(&path);
-        let (_, dir_components) = path_components.split_last().unwrap();
-        let dirpath = PathBuf::from(dir_components.join("/"));
-        fs::create_dir_all(dirpath).unwrap();
-        let mut file = File::create(path).unwrap();
+        let paths = Context::paths_from_key(&key.replace("#/", "out/"));
+        fs::create_dir_all(paths.dirpath).unwrap();
+        let mut file = File::create(paths.path).unwrap();
         file.write_all(val.pp().as_bytes()).unwrap();
         // println!("wrote {:} with {:}", key, val.pp());
     }
 
-    // TODO: Write it out to disk
+    generate_top_level(&mut ctx)
 
     // println!("{:#?}", schema);
 }
