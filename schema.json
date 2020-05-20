@@ -586,6 +586,9 @@
           ]
         }
       },
+      "required": [
+        "commands"
+      ],
       "additionalProperties": false
     },
     "nestedCommandStep": {

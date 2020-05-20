@@ -3,7 +3,7 @@
 , artifact_paths : Optional (./properties/artifact_paths/Type ) 
 , branches : Optional (./properties/branches/Type ) 
 , command : Optional (./properties/command/Type ) 
-, commands : Optional (./properties/commands/Type ) 
+, commands : (./properties/commands/Type ) 
 , concurrency : Optional (./properties/concurrency/Type ) 
 , concurrency_group : Optional (./properties/concurrency_group/Type ) 
 , depends_on : Optional (./properties/depends_on/Type ) 

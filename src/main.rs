@@ -16,6 +16,13 @@ use std::iter::{self, Zip};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+fn pp_pi_prefix(vars: &BTreeSet<VarRef>) -> String {
+    vars.iter()
+        .map(|v| format!("\\({} : Type) ->", v.pp()))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 // Blacklist things that are broken
 fn skip_because_blacklist(name: &str) -> bool {
     name.contains("blockStep")
@@ -329,14 +336,7 @@ impl Type {
                 chunks.push("\n}".to_string());
                 chunks.join(" ")
             }
-            Type::Pi(vars, t_) => {
-                let prefix = vars
-                    .iter()
-                    .map(|v| format!("\\({} : Type) ->", v.pp()))
-                    .collect::<Vec<String>>()
-                    .join(" ");
-                format!("{} {}", prefix, t_.pp())
-            }
+            Type::Pi(vars, t_) => format!("{} {}", pp_pi_prefix(vars), t_.pp()),
         }
     }
 }
@@ -350,7 +350,8 @@ fn is_grouping_component(s: &str) -> bool {
 }
 
 pub struct Paths {
-    path: PathBuf,
+    path_type: PathBuf,
+    path_schema: PathBuf,
     dirpath: PathBuf,
 }
 
@@ -374,11 +375,17 @@ impl Context {
     }
 
     fn paths_from_key(key: &str) -> Paths {
-        let path = PathBuf::from(key.replace("#/", "out/"));
-        let path_components = path_to_components(&path);
+        let key = key.replace("#/", "out/");
+        let path_type = PathBuf::from(key.clone());
+        let path_schema = PathBuf::from(key.replace("/Type", "/Schema"));
+        let path_components = path_to_components(&path_type);
         let (_, dir_components) = path_components.split_last().unwrap();
         let dirpath = PathBuf::from(dir_components.join("/"));
-        Paths { path, dirpath }
+        Paths {
+            path_type,
+            path_schema,
+            dirpath,
+        }
     }
 
     fn new_var(&mut self) -> VarRef {
@@ -484,11 +491,9 @@ fn unionOrRegular(ctx: &mut Context, ss: &[Schema]) -> Type {
 }
 
 fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
-    // Unsupported
-    assert!(o.required.len() == 0);
-
     let mut map: BTreeMap<String, Rc<Type0>> = BTreeMap::new();
     ctx.push("properties");
+    let required = o.required.clone();
     for (key, val) in o.properties.iter() {
         let obj = schemaAsObj(val);
         ctx.push(key);
@@ -496,7 +501,15 @@ fn objToType(ctx: &mut Context, o: &ObjectValidation) -> Type {
         let innerTyp = schemaToType(ctx, obj).indirection(name, ctx);
         ctx.pop();
         // Assume the schema doesn't know what is optional and required (unfortunately)
-        map.insert(key.clone(), Rc::new(Type0::Optional(Rc::new(innerTyp))));
+
+        map.insert(
+            key.clone(),
+            Rc::new(if required.contains(key) {
+                innerTyp
+            } else {
+                Type0::Optional(Rc::new(innerTyp))
+            }),
+        );
     }
     ctx.pop();
     Type::Record(map)
@@ -654,14 +667,13 @@ fn addDefinitionsToCtx(ctx: &mut Context, definitions: &BTreeMap<String, Schema>
     ctx.pop();
 }
 
-fn rootSchema(r: &RootSchema) -> (Context, Type) {
-    let mut ctx = Context::new();
-    addDefinitionsToCtx(&mut ctx, &r.definitions);
+fn rootSchema(ctx: &mut Context, r: &RootSchema) -> Type {
+    addDefinitionsToCtx(ctx, &r.definitions);
 
-    let rootRecord = schemaToTypeTopLevel(&mut ctx, &r.schema);
+    let rootRecord = schemaToTypeTopLevel(ctx, &r.schema);
 
     // println!("Root record {:#?}, ctx {:#?}", rootRecord, ctx);
-    (ctx, rootRecord)
+    rootRecord
 }
 
 mod lambda_lift {
@@ -669,6 +681,26 @@ mod lambda_lift {
 
     fn gen_new_vars(ctx: &mut Context, count: usize) -> Vec<VarRef> {
         iter::repeat_with(|| ctx.new_var()).take(count).collect()
+    }
+
+    // TODO: Remove this duplication with traits at some point
+    pub fn pi_all_expr(vars: &[VarRef], expr: Rc<Expr>) -> Rc<Expr> {
+        if vars.len() == 0 {
+            expr
+        } else {
+            let mut new_vars = BTreeSet::new();
+            for v in vars {
+                new_vars.insert(v.clone());
+            }
+
+            match &*expr {
+                Expr::Pi(old_vars, rest) => {
+                    new_vars.append(&mut old_vars.clone());
+                    Rc::new(Expr::Pi(new_vars, rest.clone()))
+                }
+                _ => Rc::new(Expr::Pi(new_vars, expr.clone())),
+            }
+        }
     }
 
     pub fn pi_all(vars: &[VarRef], typ: Rc<Type>) -> Rc<Type> {
@@ -702,7 +734,14 @@ mod lambda_lift {
                 StringMap(t_) => Rc::new(StringMap(go(ctx, t_.clone(), new_vars))),
                 Reference(p0, s, _, vars) => {
                     // safe to unwrap since we've already put all refs in the context
-                    let arity = ctx.data.get(s).unwrap().arity();
+                    let arity = match ctx.data.get(s) {
+                        Some(typ) => typ.arity(),
+                        None => ctx
+                            .data
+                            .get(&s.replace("/Schema", "/Type"))
+                            .unwrap()
+                            .arity(),
+                    };
                     // gen the vars
                     let mut vs: Vec<VarRef> = gen_new_vars(ctx, arity - vars.len());
                     {
@@ -775,8 +814,10 @@ mod lambda_lift {
 }
 
 // Simple values for the top-level definitions
-enum Expr {
+pub enum Expr {
     Type(Rc<Type>),
+    None_(Rc<Type0>),
+    Pi(BTreeSet<VarRef>, Rc<Expr>),
     Record(BTreeMap<String, Rc<Expr>>),
 }
 impl Expr {
@@ -798,7 +839,37 @@ impl Expr {
                 chunks.push("\n}".to_string());
                 chunks.join(" ")
             }
+            Expr::Pi(vars, e) => format!("{} {}", pp_pi_prefix(vars), e.pp()),
+            Expr::None_(typ) => format!("None ({})", typ.pp()),
         }
+    }
+}
+
+fn make_schema(ctx: &mut Context, typ: Rc<Type>) -> Rc<Expr> {
+    let fallthrough = Rc::new(Expr::Type(typ.clone()));
+    match &*typ {
+        Type::Pi(vars, inner_typ) => {
+            Rc::new(Expr::Pi(vars.clone(), make_schema(ctx, inner_typ.clone())))
+        }
+        Type::Record(typ_map) => {
+            let mut defaults: BTreeMap<String, Rc<Expr>> = BTreeMap::new();
+
+            for (key, val) in typ_map {
+                match &**val {
+                    Type0::Optional(optional_typ) => {
+                        defaults
+                            .insert(key.to_string(), Rc::new(Expr::None_(optional_typ.clone())));
+                    }
+                    _ => (),
+                }
+            }
+
+            let mut map: BTreeMap<String, Rc<Expr>> = BTreeMap::new();
+            map.insert("Type".to_string(), Rc::new(Expr::Type(typ.clone())));
+            map.insert("default".to_string(), Rc::new(Expr::Record(defaults)));
+            Rc::new(Expr::Record(map))
+        }
+        _ => fallthrough,
     }
 }
 
@@ -813,7 +884,7 @@ fn generate_top_level(ctx: &mut Context) {
         let mut vec = Vec::new();
         let typ = Rc::new(Type::Basic(Rc::new(Type0::Reference(
             PathBuf::from("#/Type"),
-            key.clone(),
+            key.clone().replace("/Type", "/Schema"),
             0,
             Vec::new(),
         ))));
@@ -828,19 +899,26 @@ fn generate_top_level(ctx: &mut Context) {
 }
 
 fn main() {
+    let mut ctx = Context::new();
+
+    // load schema
     let file = File::open(PathBuf::new().join("schema.json")).expect("schema");
     let reader = BufReader::new(file);
-
     let schema: RootSchema = serde_json::from_reader(reader).expect("from_reader");
 
-    let (mut ctx, _) = rootSchema(&schema);
+    let _ = rootSchema(&mut ctx, &schema);
 
     lambda_lift::run(&mut ctx);
-    for (key, val) in &ctx.data {
+    let data = ctx.data.clone();
+    for (key, val) in data {
         let paths = Context::paths_from_key(&key.replace("#/", "out/"));
+        let expr = make_schema(&mut ctx, val.clone());
+
         fs::create_dir_all(paths.dirpath).unwrap();
-        let mut file = File::create(paths.path).unwrap();
-        file.write_all(val.pp().as_bytes()).unwrap();
+        let mut file = File::create(paths.path_schema).unwrap();
+        file.write_all(expr.pp().as_bytes()).unwrap();
+        let mut file2 = File::create(paths.path_type).unwrap();
+        file2.write_all(val.pp().as_bytes()).unwrap();
         // println!("wrote {:} with {:}", key, val.pp());
     }
 
