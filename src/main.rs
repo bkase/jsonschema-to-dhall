@@ -354,6 +354,15 @@ pub struct Paths {
     path_schema: PathBuf,
     dirpath: PathBuf,
 }
+impl Paths {
+    fn type_to_schema(s: &str) -> String {
+        s.replace("/Type", "/Schema")
+    }
+
+    fn schema_to_type(s: &str) -> String {
+        s.replace("/Schema", "/Type")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -377,7 +386,7 @@ impl Context {
     fn paths_from_key(key: &str) -> Paths {
         let key = key.replace("#/", "out/");
         let path_type = PathBuf::from(key.clone());
-        let path_schema = PathBuf::from(key.replace("/Type", "/Schema"));
+        let path_schema = PathBuf::from(Paths::type_to_schema(&key));
         let path_components = path_to_components(&path_type);
         let (_, dir_components) = path_components.split_last().unwrap();
         let dirpath = PathBuf::from(dir_components.join("/"));
@@ -736,11 +745,7 @@ mod lambda_lift {
                     // safe to unwrap since we've already put all refs in the context
                     let arity = match ctx.data.get(s) {
                         Some(typ) => typ.arity(),
-                        None => ctx
-                            .data
-                            .get(&s.replace("/Schema", "/Type"))
-                            .unwrap()
-                            .arity(),
+                        None => ctx.data.get(&Paths::schema_to_type(&s)).unwrap().arity(),
                     };
                     // gen the vars
                     let mut vs: Vec<VarRef> = gen_new_vars(ctx, arity - vars.len());
@@ -884,7 +889,7 @@ fn generate_top_level(ctx: &mut Context) {
         let mut vec = Vec::new();
         let typ = Rc::new(Type::Basic(Rc::new(Type0::Reference(
             PathBuf::from("#/Type"),
-            key.clone().replace("/Type", "/Schema"),
+            Paths::type_to_schema(&key),
             0,
             Vec::new(),
         ))));
