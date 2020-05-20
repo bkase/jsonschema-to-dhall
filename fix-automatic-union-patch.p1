@@ -6,3 +6,11 @@ index f13cd70..6abcfd5 100644
 -< AutomaticRetry/Type : (../../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../../automaticRetry/Type ) >
 \ No newline at end of file
 +< AutomaticRetry/Type : (../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../automaticRetry/Type ) >
+diff --git a/out/definitions/commandStep/properties/retry/properties/automatic/Schema b/out/definitions/commandStep/properties/retry/properties/automatic/Schema
+index 6abcfd5..f13cd70 100755
+--- a/out/definitions/commandStep/properties/retry/properties/automatic/Schema
++++ b/out/definitions/commandStep/properties/retry/properties/automatic/Schema
+@@ -1 +1 @@
+-< AutomaticRetry/Type : (../../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../../automaticRetry/Type ) >
+\ No newline at end of file
++< AutomaticRetry/Type : (../../../../../automaticRetry/Type ) | Boolean : Bool | ListAutomaticRetry/Type : List (../../../../../automaticRetry/Type ) >
