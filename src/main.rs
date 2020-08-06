@@ -741,7 +741,6 @@ mod lambda_lift {
         fn go(ctx: &mut Context, typ: Rc<Type0>, new_vars: &mut Vec<VarRef>) -> Rc<Type0> {
             use Type0::*;
             match &*typ {
-                Bool | Text | Natural | Var(_) => typ,
                 Bool | Text | Natural | Integer | Var(_) => typ,
                 List(t_) => Rc::new(List(go(ctx, t_.clone(), new_vars))),
                 Optional(t_) => Rc::new(Optional(go(ctx, t_.clone(), new_vars))),
