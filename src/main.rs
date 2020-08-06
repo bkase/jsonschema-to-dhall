@@ -167,6 +167,7 @@ pub enum Type0 {
     Bool,
     Text,
     Natural,
+    Integer,
     List(Rc<Type0>),
     Optional(Rc<Type0>),
     StringMap(Rc<Type0>),
@@ -205,6 +206,7 @@ impl Type0 {
             Type0::Bool => "Boolean".to_string(),
             Type0::Text => "String".to_string(),
             Type0::Natural => "Number".to_string(),
+            Type0::Integer => "Integer".to_string(),
             Type0::List(t_) => format!("List{}", t_.to_variant_name(ctx)),
             Type0::Optional(t_) => format!("Optional{}", t_.to_variant_name(ctx)),
             Type0::StringMap(t_) => format!("StringMap{}", t_.to_variant_name(ctx)),
@@ -234,6 +236,7 @@ impl Type0 {
             Type0::Bool => "Bool".to_string(),
             Type0::Text => "Text".to_string(),
             Type0::Natural => "Natural".to_string(),
+            Type0::Integer => "Integer".to_string(),
             Type0::List(t_) => format!("List {}", t_.pp()),
             Type0::Optional(t_) => format!("Optional {}", t_.pp()),
             Type0::StringMap(t_) => format!("List {{ mapKey: Text, mapValue: {} }}", t_.pp()),
@@ -579,7 +582,8 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                 SingleOrVec::Single(it) => match it {
                     box InstanceType::Null => panic!("Unimplemented"),
                     box InstanceType::Boolean => Type0::Bool,
-                    box InstanceType::Number | box InstanceType::Integer => Type0::Natural,
+                    box InstanceType::Number => Type0::Natural,
+                    box InstanceType::Integer => Type0::Integer,
                     box InstanceType::String => Type0::Text,
                     box InstanceType::Array => {
                         let array = s.array.expect("Array has array field");
@@ -737,7 +741,7 @@ mod lambda_lift {
         fn go(ctx: &mut Context, typ: Rc<Type0>, new_vars: &mut Vec<VarRef>) -> Rc<Type0> {
             use Type0::*;
             match &*typ {
-                Bool | Text | Natural | Var(_) => typ,
+                Bool | Text | Natural | Integer | Var(_) => typ,
                 List(t_) => Rc::new(List(go(ctx, t_.clone(), new_vars))),
                 Optional(t_) => Rc::new(Optional(go(ctx, t_.clone(), new_vars))),
                 StringMap(t_) => Rc::new(StringMap(go(ctx, t_.clone(), new_vars))),

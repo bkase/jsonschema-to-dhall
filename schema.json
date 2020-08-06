@@ -34,7 +34,7 @@
               ]
             },
             {
-              "type": "number"
+              "type": "integer"
             }
           ]
         },
