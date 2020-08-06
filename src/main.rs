@@ -579,7 +579,8 @@ fn schemaToType(ctx: &mut Context, s: &SchemaObject) -> Type0 {
                 SingleOrVec::Single(it) => match it {
                     box InstanceType::Null => panic!("Unimplemented"),
                     box InstanceType::Boolean => Type0::Bool,
-                    box InstanceType::Number | box InstanceType::Integer => Type0::Natural,
+                    box InstanceType::Number => Type0::Natural,
+                    box InstanceType::Integer => Type0::Integer,
                     box InstanceType::String => Type0::Text,
                     box InstanceType::Array => {
                         let array = s.array.expect("Array has array field");
