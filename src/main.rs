@@ -45,6 +45,13 @@ fn path_to_components(path: &Path) -> Vec<String> {
         .collect()
 }
 
+fn escape_dhall_keyword(kw: &str) -> String {
+    match kw {
+        "if" => "`if`".to_string(),
+         _ => kw.to_string()
+    }
+}
+
 // example:
 // within = /a/b/c/d.txt
 // to = /a/b/e/f.txt
@@ -331,7 +338,7 @@ impl Type {
                     if !first {
                         chunks.push("\n,".to_string());
                     }
-                    chunks.push(key.to_string());
+                    chunks.push(escape_dhall_keyword(key));
                     chunks.push(":".to_string());
                     chunks.push(val.pp());
                     first = false;
@@ -840,7 +847,7 @@ impl Expr {
                     if !first {
                         chunks.push("\n,".to_string());
                     }
-                    chunks.push(key.to_string());
+                    chunks.push(escape_dhall_keyword(key));
                     chunks.push("=".to_string());
                     chunks.push(val.pp());
                     first = false;
