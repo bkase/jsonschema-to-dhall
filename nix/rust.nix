@@ -3,8 +3,8 @@ let
   pkgs =
     import sources.nixpkgs { overlays = [ (import sources.nixpkgs-mozilla) ]; };
   channel = "nightly";
-  date = "2020-04-07";
-  targets = if pkgs.stdenv.isDarwin then [ "x86_64-apple-darwin" ] else [ "x86_64_unknown_linux_gnu" ];
+  date = "2021-11-25";
+  targets = if pkgs.stdenv.isDarwin then [ "x86_64-apple-darwin" ] else [ "x86_64-unknown-linux-gnu" ];
   rust1 = pkgs.rustChannelOfTargets channel date targets;
   rustc = rust1.override {
     inherit targets;
